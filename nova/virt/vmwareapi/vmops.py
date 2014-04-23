@@ -1,5 +1,6 @@
 # vim: tabstop=4 shiftwidth=4 softtabstop=4
 
+# Copyright (c) 2014 SUSE Linux Products GmbH
 # Copyright (c) 2013 Hewlett-Packard Development Company, L.P.
 # Copyright (c) 2012 VMware, Inc.
 # Copyright (c) 2011 Citrix Systems, Inc.
@@ -35,6 +36,7 @@ from nova.api.metadata import base as instance_metadata
 from nova import compute
 from nova.compute import power_state
 from nova.compute import task_states
+from nova.compute import vm_states
 from nova import context as nova_context
 from nova import exception
 from nova.openstack.common import excutils
@@ -882,6 +884,104 @@ class VMwareVMOps(object):
             self._session._wait_for_task(instance['uuid'], reset_task)
             LOG.debug(_("Did hard reboot of VM"), instance=instance)
 
+    def _destroy_instance(self, instance, network_info, destroy_disks=True,
+                          instance_name=None):
+        # Destroy a VM instance
+        # Get the instance name. In some cases this may differ from the 'uuid',
+        # for example when the spawn of a rescue instance takes place.
+        if not instance_name:
+            instance_name = instance['uuid']
+        try:
+            vm_ref = vm_util.get_vm_ref_from_name(self._session, instance_name)
+            lst_properties = ["config.files.vmPathName", "runtime.powerState",
+                              "datastore"]
+            props = self._session._call_method(vim_util,
+                        "get_object_properties",
+                        None, vm_ref, "VirtualMachine", lst_properties)
+            query = {'runtime.powerState': None,
+                     'config.files.vmPathName': None,
+                     'datastore': None}
+            self._get_values_from_object_properties(props, query)
+            pwr_state = query['runtime.powerState']
+            vm_config_pathname = query['config.files.vmPathName']
+            datastore_name = None
+            if vm_config_pathname:
+                _ds_path = ds_util.split_datastore_path(vm_config_pathname)
+                datastore_name, vmx_file_path = _ds_path
+            # Power off the VM if it is in PoweredOn state.
+            if pwr_state == "poweredOn":
+                LOG.debug(_("Powering off the VM"), instance=instance)
+                poweroff_task = self._session._call_method(
+                       self._session._get_vim(),
+                       "PowerOffVM_Task", vm_ref)
+                self._session._wait_for_task(poweroff_task)
+                LOG.debug(_("Powered off the VM"), instance=instance)
+
+            # Un-register the VM
+            try:
+                LOG.debug(_("Unregistering the VM"), instance=instance)
+                self._session._call_method(self._session._get_vim(),
+                                           "UnregisterVM", vm_ref)
+                LOG.debug(_("Unregistered the VM"), instance=instance)
+            except Exception as excep:
+                LOG.warn(_("In vmwareapi:vmops:_destroy_instance, got this "
+                           "exception while un-registering the VM: %s"),
+                         excep)
+            # Delete the folder holding the VM related content on
+            # the datastore.
+            if destroy_disks and datastore_name:
+                try:
+                    dir_ds_compliant_path = ds_util.build_datastore_path(
+                                     datastore_name,
+                                     os.path.dirname(vmx_file_path))
+                    LOG.debug(_("Deleting contents of the VM from "
+                                "datastore %(datastore_name)s") %
+                               {'datastore_name': datastore_name},
+                              instance=instance)
+                    ds_ref_ret = query['datastore']
+                    ds_ref = ds_ref_ret.ManagedObjectReference[0]
+                    dc_info = self.get_datacenter_ref_and_name(ds_ref)
+                    ds_util.file_delete(self._session,
+                                        dir_ds_compliant_path,
+                                        dc_info.ref)
+                    LOG.debug(_("Deleted contents of the VM from "
+                                "datastore %(datastore_name)s") %
+                               {'datastore_name': datastore_name},
+                              instance=instance)
+                except Exception as excep:
+                    LOG.warn(_("In vmwareapi:vmops:_destroy_instance, "
+                                "got this exception while deleting "
+                                "the VM contents from the disk: %s"),
+                             excep)
+        except Exception as exc:
+            LOG.exception(exc, instance=instance)
+        finally:
+            vm_util.vm_ref_cache_delete(instance_name)
+
+    def destroy(self, instance, network_info, destroy_disks=True):
+        """Destroy a VM instance.
+
+        Steps followed for each VM are:
+        1. Power off, if it is in poweredOn state.
+        2. Un-register.
+        3. Delete the contents of the folder holding the VM related data.
+        """
+        # If there is a rescue VM then we need to destroy that one too.
+        LOG.debug(_("Destroying instance"), instance=instance)
+        if instance['vm_state'] == vm_states.RESCUED:
+            LOG.debug(_("Rescue VM configured"), instance=instance)
+            try:
+                self.unrescue(instance, power_on=False)
+                LOG.debug(_("Rescue VM destroyed"), instance=instance)
+            except Exception:
+                rescue_name = instance['uuid'] + self._rescue_suffix
+                self._destroy_instance(instance, network_info,
+                                       destroy_disks=destroy_disks,
+                                       instance_name=rescue_name)
+        self._destroy_instance(instance, network_info,
+                               destroy_disks=destroy_disks)
+        LOG.debug(_("Instance destroyed"), instance=instance)
+
     def _delete(self, instance, network_info):
         """
         Destroy a VM instance. Steps followed are:
@@ -901,86 +1001,6 @@ class VMwareVMOps(object):
             except Exception as excep:
                 LOG.warn(_("In vmwareapi:vmops:delete, got this exception"
                            " while destroying the VM: %s") % str(excep))
-        except Exception as exc:
-            LOG.exception(exc, instance=instance)
-
-    def destroy(self, instance, network_info, destroy_disks=True,
-                instance_name=None):
-        """
-        Destroy a VM instance. Steps followed are:
-        1. Power off the VM, if it is in poweredOn state.
-        2. Un-register a VM.
-        3. Delete the contents of the folder holding the VM related data.
-        """
-        # Get the instance name. In some cases this may differ from the 'uuid',
-        # for example when the spawn of a rescue instance takes place.
-        if not instance_name:
-            instance_name = instance['uuid']
-        try:
-            vm_ref = vm_util.get_vm_ref_from_name(self._session, instance_name)
-            lst_properties = ["config.files.vmPathName", "runtime.powerState",
-                              "datastore"]
-            props = self._session._call_method(vim_util,
-                        "get_object_properties",
-                        None, vm_ref, "VirtualMachine", lst_properties)
-            query = {'runtime.powerState': None,
-                     'config.files.vmPathName': None,
-                     'datastore': None}
-            self._get_values_from_object_properties(props, query)
-            pwr_state = query['runtime.powerState']
-            vm_config_pathname = query['config.files.vmPathName']
-            if vm_config_pathname:
-                _ds_path = vm_util.split_datastore_path(vm_config_pathname)
-                datastore_name, vmx_file_path = _ds_path
-            # Power off the VM if it is in PoweredOn state.
-            if pwr_state == "poweredOn":
-                LOG.debug(_("Powering off the VM"), instance=instance)
-                poweroff_task = self._session._call_method(
-                       self._session._get_vim(),
-                       "PowerOffVM_Task", vm_ref)
-                self._session._wait_for_task(instance['uuid'], poweroff_task)
-                LOG.debug(_("Powered off the VM"), instance=instance)
-
-            # Un-register the VM
-            try:
-                LOG.debug(_("Unregistering the VM"), instance=instance)
-                self._session._call_method(self._session._get_vim(),
-                                           "UnregisterVM", vm_ref)
-                LOG.debug(_("Unregistered the VM"), instance=instance)
-            except Exception as excep:
-                LOG.warn(_("In vmwareapi:vmops:destroy, got this exception"
-                           " while un-registering the VM: %s") % str(excep))
-            # Delete the folder holding the VM related content on
-            # the datastore.
-            if destroy_disks:
-                try:
-                    dir_ds_compliant_path = vm_util.build_datastore_path(
-                                     datastore_name,
-                                     os.path.dirname(vmx_file_path))
-                    LOG.debug(_("Deleting contents of the VM from "
-                                "datastore %(datastore_name)s") %
-                               {'datastore_name': datastore_name},
-                              instance=instance)
-                    ds_ref_ret = query['datastore']
-                    ds_ref = ds_ref_ret.ManagedObjectReference[0]
-                    dc_info = self.get_datacenter_ref_and_name(ds_ref)
-                    vim = self._session._get_vim()
-                    delete_task = self._session._call_method(
-                        vim,
-                        "DeleteDatastoreFile_Task",
-                        vim.get_service_content().fileManager,
-                        name=dir_ds_compliant_path,
-                        datacenter=dc_info.ref)
-                    self._session._wait_for_task(instance['uuid'], delete_task)
-                    LOG.debug(_("Deleted contents of the VM from "
-                                "datastore %(datastore_name)s") %
-                               {'datastore_name': datastore_name},
-                              instance=instance)
-                except Exception as excep:
-                    LOG.warn(_("In vmwareapi:vmops:destroy, "
-                                 "got this exception while deleting"
-                                 " the VM contents from the disk: %s")
-                                 % str(excep))
         except Exception as exc:
             LOG.exception(exc, instance=instance)
 
@@ -1065,7 +1085,7 @@ class VMwareVMOps(object):
                                 controller_key=controller_key,
                                 unit_number=unit_number)
 
-    def unrescue(self, instance):
+    def unrescue(self, instance, power_on=True):
         """Unrescue the specified instance."""
         # Get the original vmdk_path
         vm_ref = vm_util.get_vm_ref(self._session, instance)
@@ -1086,8 +1106,9 @@ class VMwareVMOps(object):
                         "VirtualMachine", "config.hardware.device")
         device = vm_util.get_vmdk_volume_disk(hardware_devices, path=vmdk_path)
         self._volumeops.detach_disk_from_vm(vm_rescue_ref, r_instance, device)
-        self.destroy(r_instance, None, instance_name=instance_name)
-        self._power_on(instance)
+        self._destroy_instance(r_instance, None, instance_name=instance_name)
+        if power_on:
+            self._power_on(instance)
 
     def power_off(self, instance):
         """Power off the specified instance."""
