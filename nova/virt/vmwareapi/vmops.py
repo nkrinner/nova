@@ -955,8 +955,6 @@ class VMwareVMOps(object):
                              excep)
         except Exception as exc:
             LOG.exception(exc, instance=instance)
-        finally:
-            vm_util.vm_ref_cache_delete(instance_name)
 
     def destroy(self, instance, network_info, destroy_disks=True):
         """Destroy a VM instance.
