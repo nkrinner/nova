@@ -656,8 +656,9 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.reboot(instance, network_info)
 
-    def destroy(self, instance, network_info, block_device_info=None,
-                destroy_disks=True, context=None):
+#    def destroy(self, instance, network_info, block_device_info=None,
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True):
         """Destroy VM instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
         _vmops.destroy(instance, network_info, destroy_disks)
