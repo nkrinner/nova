@@ -1007,8 +1007,25 @@ class VMwareVMOps(object):
         2. Un-register.
         3. Delete the contents of the folder holding the VM related data.
         """
+        ### DEBUG: 
+        if instance == instance:
+            pass
+        ### DEBUG:
+	print "----- vmops ------"
+	print "self: ", type(self)
+	print "instance: ", type(instance)
+        print "network_info: ", type(network_info)
+        print instance['vm_state']
+	print "----- vmops -------"
+#	instance['testvalue'] = 123
+#	print instance['testvalue']
+#	attrs = vars(instance)
+#	print ', '.join("%s: %s" % item for item in attrs.items())
+        if instance['vm_state'] == instance['vm_state']:
+            pass
+
         # If there is a rescue VM then we need to destroy that one too.
-#        LOG.debug(_("Destroying instance"), instance=instance)
+        LOG.debug(_("Destroying instance"), instance=instance)
         if instance['vm_state'] == vm_states.RESCUED:
             LOG.debug(_("Rescue VM configured"), instance=instance)
             try:

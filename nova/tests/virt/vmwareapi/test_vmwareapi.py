@@ -801,12 +801,19 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                               fake_method)
         ):
             self.instance['vm_state'] = vm_states.RESCUED
-	    # Test fails here, when calling destroy from nova/nova/virt/vmwareapi/driver.py:201
-	    # which calls destroy in nova/nova/virt/vmwareapi/vmops.py:1011
-	    #      LOG.debug(_("Destroying instance"), instance=instance)
-	    # which seemingly causes a logging error
+	    # Test fails here:
+
+#            self.conn.destroy(self.instance, self.network_info)
+#            self.conn.destroy(self.context, self.instance, self.network_info)
+            print "------ test ----------"
+            print "test: self: ", type(self)
+            print "test: self.instance: ", type(self.instance)
+            print "test: self.network_info: ", type(self.network_info)
+            print "test: self.context: ", type(self.context)
+            print "------ test -----------"
             self.conn.destroy(self.context, self.instance, self.network_info)
-            self.conn.destroy(self.context, self.instance, self.network_info)
+#            self.conn.destroy(1, "test", 2)
+
             inst_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
             self.assertFalse(vmwareapi_fake.get_file(inst_path))
             rescue_file_path = '[%s] %s-rescue/%s-rescue.vmdk' % (self.ds,
@@ -832,13 +839,13 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._check_vm_info(info, power_state.RUNNING)
         instances = self.conn.list_instances()
         self.assertEquals(len(instances), 1)
-        self.conn.destroy(self.instance, self.network_info)
+        self.conn.destroy(self.context, self.instance, self.network_info)
         instances = self.conn.list_instances()
         self.assertEquals(len(instances), 0)
 
     def test_destroy_non_existent(self):
         self._create_instance_in_the_db()
-        self.assertEquals(self.conn.destroy(self.instance, self.network_info),
+        self.assertEquals(self.conn.destroy(self.context, self.instance, self.network_info),
                           None)
 
     def _rescue(self, config_drive=False):
@@ -1228,7 +1235,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_connection_info_get_after_destroy(self):
         self._create_vm()
-        self.conn.destroy(self.instance, self.network_info)
+        self.conn.destroy(self.context, self.instance, self.network_info)
         connector = self.conn.get_volume_connector(self.instance)
         self.assertEqual(connector['ip'], 'test_url')
         self.assertEqual(connector['host'], 'test_url')
@@ -1363,7 +1370,7 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase):
         info = self.conn.get_info({'uuid': uuid1,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
-        self.conn.destroy(self.instance, self.network_info)
+        self.conn.destroy(self.context, self.instance, self.network_info)
         self._create_vm(node=self.node_name2, num_instances=1,
                         uuid=uuid2)
         info = self.conn.get_info({'uuid': uuid2,
