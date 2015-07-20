@@ -1759,3 +1759,7 @@ class InvalidHypervisorVirtType(Invalid):
 
 class InvalidVirtualMachineMode(Invalid):
     msg_fmt = _("Virtual machine mode '%(vmmode)s' is not recognised")
+
+
+class NUMATopologyUnsupported(Invalid):
+    msg_fmt = _("Host does not support guests with NUMA topology set")

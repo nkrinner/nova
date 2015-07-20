@@ -361,8 +361,13 @@ MIN_LIBVIRT_BLOCKCOMMIT_RELATIVE_VERSION = (1, 2, 7)
 MIN_LIBVIRT_DISCARD_VERSION = (1, 0, 6)
 MIN_QEMU_DISCARD_VERSION = (1, 6, 0)
 REQ_HYPERVISOR_DISCARD = "QEMU"
-# libvirt numa topology support
-MIN_LIBVIRT_NUMA_TOPOLOGY_VERSION = (1, 0, 4)
+# While earlier versions could support NUMA reporting and
+# NUMA placement, not until 1.2.7 was there the ability
+# to pin guest nodes to host nodes, so mandate that. Without
+# this the scheduler cannot make guaranteed decisions, as the
+# guest placement may not match what was requested
+MIN_LIBVIRT_NUMA_VERSION = (1, 2, 7)
+
 
 
 def libvirt_error_handler(context, err):
@@ -3747,6 +3752,15 @@ class LibvirtDriver(driver.ComputeDriver):
                with the instance's requested topology. If the host does
                not support NUMA, then guest_cpu_tune will be None.
         """
+
+        if (not self._has_numa_support() and
+                instance.numa_topology is not None):
+            # We should not get here, since we should have avoided
+            # reporting NUMA topology from _get_host_numa_topology
+            # in the first place. Just in case of a scheduler
+            # mess up though, raise an exception
+            raise exception.NUMATopologyUnsupported()
+
         topology = self._get_host_numa_topology()
         # We have instance NUMA so translate it to the config class
         guest_cpu_numa = self._get_cpu_numa_config_from_instance(
@@ -4869,8 +4883,17 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return jsonutils.dumps(pci_info)
 
+    def _has_numa_support(self):
+        if not self._has_min_version(MIN_LIBVIRT_NUMA_VERSION):
+            return False
+
+        if CONF.libvirt.virt_type not in ['qemu', 'kvm']:
+            return False
+
+        return True
+
     def _get_host_numa_topology(self):
-        if not self._has_min_version(MIN_LIBVIRT_NUMA_TOPOLOGY_VERSION):
+        if not self._has_numa_support():
             return
 
         caps = self._get_host_capabilities()
