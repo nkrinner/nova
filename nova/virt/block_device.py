@@ -15,6 +15,7 @@
 import functools
 import operator
 
+from nova import availability_zones as az
 from nova import block_device
 from nova.i18n import _
 from nova.i18n import _LI
@@ -334,6 +335,9 @@ class DriverImageBlockDevice(DriverVolumeBlockDevice):
                virt_driver, wait_func=None, do_check_attach=True):
         if not self.volume_id:
             av_zone = instance.availability_zone
+            if not av_zone:
+              av_zone = az.get_instance_availability_zone(context, instance)
+
             vol = volume_api.create(context, self.volume_size,
                                     '', '', image_id=self.image_id,
                                     availability_zone=av_zone)
